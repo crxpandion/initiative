@@ -152,6 +152,7 @@ func main() {
 	flag.StringVar(&monstersFile, "m", "./test/monsters.csv,./test/monsters_2.csv", "")
 	flag.StringVar(&playersFile, "p", "./test/players.csv", "")
 	flag.StringVar(&bind, "b", "localhost:8080", "")
+	flag.Parse()
 
 	pf, err := os.Open(playersFile)
 	if err != nil {
@@ -195,52 +196,31 @@ var dmHTML = `
 	<meta charset='UTF-8'>
 	<title>Inititatives of the 11 elephants</title>
 	<style>
-	.pure-table {
-		/* Remove spacing between table cells (from Normalize.css) */
-		border-collapse: collapse;
-		border-spacing: 0;
-		empty-cells: show;
-		border: 1px solid #cbcbcb;
-	}
-	
-	.pure-table caption {
-		color: #000;
-		font: italic 85%/1 arial, sans-serif;
-		padding: 1em 0;
-		text-align: center;
-	}
-	
-	.pure-table td,
-	.pure-table th {
-		border-left: 1px solid #cbcbcb;/*  inner column border */
-		border-width: 0 0 0 1px;
-		font-size: inherit;
-		margin: 0;
-		overflow: visible; /*to make ths where the title is really long work*/
-		padding: 0.5em 1em; /* cell padding */
-	}
-	
-	.pure-table thead {
-		background-color: #e0e0e0;
-		color: #000;
-		text-align: left;
-		vertical-align: bottom;
-	}
-	
-	/* BORDERED TABLES */
-	.pure-table-bordered td {
-		border-bottom: 1px solid #cbcbcb;
-	}
-	.pure-table-bordered tbody > tr:last-child > td {
-		border-bottom-width: 0;
-	}
-	.active {
-		background: yellow;
-	}
+		.table {
+			border-collapse: collapse;
+			border-spacing: 0;
+			empty-cells: show;
+			border: 1px solid #cbcbcb;
+		}
+		.table td,
+		.table th {
+			border-left: 1px solid #cbcbcb;
+			border-width: 0 0 0 1px;
+			font-size: inherit;
+			margin: 0;
+			overflow: visible;
+			padding: 0.5em 1em;
+		}
+		.table-bordered td {
+			border-bottom: 1px solid #cbcbcb;
+		}
+		.active {
+			background: yellow;
+		}
 	</style>
 </head>
 <body>
-	<table id='initiative' class='pure-table pure-table-bordered'>
+	<table id='initiative' class='table table-bordered'>
 			<tr><th>Name</th><th>Initiative</th><th/></tr>{{range .TurnOrder}}
 			<tr><td>{{.Name}}</td><td>{{.Roll}}</td><td><input type='button' value='kill' class='killable'/></td></tr>{{end}}
 	</table>
