@@ -4,17 +4,19 @@ import (
 	"encoding/csv"
 	"flag"
 	"fmt"
+	"hash/fnv"
 	"html/template"
 	"io"
 	"log"
 	"math/rand"
 	"net/http"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/justinian/dice"
 )
 
@@ -36,17 +38,29 @@ type Roll struct {
 
 type encounter struct {
 	TurnOrder []Roll
-	p         []player
 	m         []monster
 }
 
-func (e *encounter) Roll() {
-	for _, pl := range e.p {
+func (e *encounter) Hash(p []player) int64 {
+	h := fnv.New64()
+	for _, mo := range e.m {
+		fmt.Fprintf(h, "%s%d", mo.Name, mo.Dex)
+	}
+	for _, p := range p {
+		fmt.Fprintf(h, "%s%d", p.Name, p.Dex)
+	}
+	return int64(h.Sum64())
+}
+
+func (e *encounter) Roll(p []player) {
+	var to []Roll
+	rand.Seed(e.Hash(p))
+	for _, pl := range p {
 		r, _, err := dice.Roll(fmt.Sprintf("1d20%+d", pl.Dex))
 		if err != nil {
 			log.Fatal(err)
 		}
-		e.TurnOrder = append(e.TurnOrder, Roll{
+		to = append(to, Roll{
 			Name: pl.Name,
 			Roll: r.Int(),
 		})
@@ -56,18 +70,20 @@ func (e *encounter) Roll() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		e.TurnOrder = append(e.TurnOrder, Roll{
+		to = append(to, Roll{
 			Name: m.Name,
 			Roll: r.Int(),
 		})
 	}
-	sort.Slice(e.TurnOrder, func(i, j int) bool {
-		return e.TurnOrder[i].Roll > e.TurnOrder[j].Roll
+	sort.Slice(to, func(i, j int) bool {
+		return to[i].Roll > to[j].Roll
 	})
+	e.TurnOrder = to
 }
 
 type server struct {
 	Encounters []encounter
+	p          []player
 	pageTpl    *template.Template
 }
 
@@ -75,12 +91,13 @@ func (s *server) EncounterAt(i int) encounter {
 	if i < 0 || i > len(s.Encounters)-1 {
 		return encounter{}
 	}
+	s.Encounters[i].Roll(s.p)
 	return s.Encounters[i]
 }
 
 func (s *server) Play(w http.ResponseWriter, req *http.Request) {
-	i, err := strconv.Atoi(req.URL.Path[1:])
-	log.Println(req.URL.Path)
+	sp := strings.Split(req.URL.Path, "/")
+	i, err := strconv.Atoi(sp[len(sp)-1])
 	if err != nil {
 		w.WriteHeader(http.StatusNotFound)
 		return
@@ -95,9 +112,8 @@ func (s *server) Play(w http.ResponseWriter, req *http.Request) {
 }
 
 var (
-	monstersFile string
-	playersFile  string
-	bind         string
+	bind string
+	dir  string
 )
 
 func parseMonsterFile(f io.Reader) []monster {
@@ -146,47 +162,137 @@ func parsePlayerFile(f io.Reader) []player {
 	return m
 }
 
-func main() {
-	rand.Seed(time.Now().UnixNano())
-
-	flag.StringVar(&monstersFile, "m", "./test/monsters.csv,./test/monsters_2.csv", "")
-	flag.StringVar(&playersFile, "p", "./test/players.csv", "")
-	flag.StringVar(&bind, "b", "localhost:8080", "")
-	flag.Parse()
-
-	pf, err := os.Open(playersFile)
+func getCSVFilesInDir(dir string) []string {
+	var files []string
+	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if info.IsDir() {
+			return nil
+		}
+		if filepath.Ext(path) == ".csv" {
+			files = append(files, path)
+		}
+		return nil
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
-	players := parsePlayerFile(pf)
+	sort.Strings(files)
+	return files
+}
 
-	e := make([]encounter, 0)
-	for _, mf := range strings.Split(monstersFile, ",") {
-		f, err := os.Open(mf)
+func (s *server) LoadPlayers(dir string) {
+	var pl []player
+	for _, pfn := range getCSVFilesInDir(dir) {
+		pf, err := os.Open(pfn)
 		if err != nil {
 			log.Fatal(err)
 		}
-		m := parseMonsterFile(f)
-
-		enc := encounter{
-			p: players,
-			m: m,
-		}
-		enc.Roll()
-		e = append(e, enc)
+		pl = append(pl, parsePlayerFile(pf)...)
 	}
+	s.p = pl
+}
+
+func (s *server) LoadMonsters(dir string) {
+	var e []encounter
+	for _, mfn := range getCSVFilesInDir(dir) {
+		mf, err := os.Open(mfn)
+		if err != nil {
+			log.Fatal(err)
+		}
+		m := parseMonsterFile(mf)
+
+		e = append(e, encounter{
+			m: m,
+		})
+	}
+	s.Encounters = e
+}
+
+func main() {
+	flag.StringVar(&dir, "d", "./test", "")
+	flag.StringVar(&bind, "b", "localhost:8080", "")
+	flag.Parse()
+
 	tpl, err := template.New("dm").Parse(dmHTML)
 	if err != nil {
 		log.Fatal(err)
 	}
 
 	s := &server{
-		Encounters: e,
-		pageTpl:    tpl,
+		pageTpl: tpl,
+	}
+	s.LoadPlayers(dir + "/players")
+	s.watchPlayer(dir + "/players")
+
+	s.LoadMonsters(dir + "/monsters")
+	s.watchMonster(dir + "/monsters")
+
+	http.HandleFunc("/encounter/", s.Play)
+	log.Fatal(http.ListenAndServe(bind, nil))
+}
+
+func (s *server) watchPlayer(dir string) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	http.HandleFunc("/", s.Play)
-	log.Fatal(http.ListenAndServe(bind, nil))
+	go func() {
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if event.Op&fsnotify.Write == fsnotify.Write {
+					log.Println("reloading players " + dir)
+					s.LoadPlayers(dir)
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				log.Println("error:", err)
+			}
+		}
+	}()
+
+	err = watcher.Add(dir)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+
+func (s *server) watchMonster(dir string) {
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	go func() {
+		for {
+			select {
+			case event, ok := <-watcher.Events:
+				if !ok {
+					return
+				}
+				if event.Op&fsnotify.Write == fsnotify.Write {
+					log.Println("reloading monsters " + dir)
+					s.LoadMonsters(dir)
+				}
+			case err, ok := <-watcher.Errors:
+				if !ok {
+					return
+				}
+				log.Println("error:", err)
+			}
+		}
+	}()
+
+	err = watcher.Add(dir)
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 var dmHTML = `
