@@ -21,6 +21,8 @@ the csv files are of the format
 ```
 <name of player/monster>,<initiative bonus (aka dex modifier)>
 ```
+for players you can indicate if they get advantage on initiative by adding a third boolean.
+
 edits to either the player file or the monsters file will automatically update the server state, but the encounter page will need to reload. This also updates the turn order rolls currently so only do this between encounters
 ## TODO
 * Somehow model statuses

@@ -21,8 +21,9 @@ import (
 )
 
 type player struct {
-	Name string
-	Dex  int
+	Name         string
+	Dex          int
+	HasAdvantage bool
 }
 
 type monster struct {
@@ -52,13 +53,34 @@ func (e *encounter) Hash(p []player) int64 {
 	return int64(h.Sum64())
 }
 
+func rollWithAdvantage(mod int) dice.RollResult {
+	r1, _, err := dice.Roll(fmt.Sprintf("1d20%+d", mod))
+	if err != nil {
+		log.Fatal(err)
+	}
+	r2, _, err := dice.Roll(fmt.Sprintf("1d20%+d", mod))
+	if err != nil {
+		log.Fatal(err)
+	}
+	if r1.Int() > r2.Int() {
+		return r1
+	}
+	return r2
+}
+
 func (e *encounter) Roll(p []player) {
 	var to []Roll
 	rand.Seed(e.Hash(p))
 	for _, pl := range p {
-		r, _, err := dice.Roll(fmt.Sprintf("1d20%+d", pl.Dex))
-		if err != nil {
-			log.Fatal(err)
+		var r dice.RollResult
+		var err error
+		if pl.HasAdvantage {
+			r = rollWithAdvantage(pl.Dex)
+		} else {
+			r, _, err = dice.Roll(fmt.Sprintf("1d20%+d", pl.Dex))
+			if err != nil {
+				log.Fatal(err)
+			}
 		}
 		to = append(to, Roll{
 			Name: pl.Name,
@@ -154,9 +176,14 @@ func parsePlayerFile(f io.Reader) []player {
 		if err != nil {
 			log.Fatal(err)
 		}
+		a, err := strconv.ParseBool(strings.TrimSpace(rec[2]))
+		if err != nil {
+			log.Fatal(err)
+		}
 		m = append(m, player{
-			Name: rec[0],
-			Dex:  dex,
+			Name:         rec[0],
+			Dex:          dex,
+			HasAdvantage: a,
 		})
 	}
 	return m
@@ -176,7 +203,21 @@ func getCSVFilesInDir(dir string) []string {
 	if err != nil {
 		log.Fatal(err)
 	}
-	sort.Strings(files)
+	sort.Slice(files, func(i, j int) bool {
+		idx := strings.Split(filepath.Base(files[i]), "_")[0]
+		jdx := strings.Split(filepath.Base(files[j]), "_")[0]
+
+		iidx, err := strconv.Atoi(idx)
+		if err != nil {
+			return files[i] < files[j]
+		}
+		jjdx, err := strconv.Atoi(jdx)
+		if err != nil {
+			return files[i] < files[j]
+		}
+		return iidx < jjdx
+	})
+	log.Println(files)
 	return files
 }
 
